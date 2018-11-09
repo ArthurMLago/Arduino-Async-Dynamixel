@@ -10,7 +10,7 @@ uint16_t registered_instruction;
 uint8_t moving;
 
 struct tx_msg{
-	char buff[16];
+	unsigned char buff[16];
 	int len;
 	int sent;
 	void (*callback)(char *);
@@ -28,6 +28,19 @@ unsigned char recv[32];
 int recv_count = 0;
 int expected_recv = 255;
 
+
+
+enum bob{
+	DYN_RD = 0x02,
+	DYN_WR = 0x03,
+	DYN_RWR = 0x04,
+	DYN_ACT = 0x05,
+	DYN_PING = 0x01,
+	DYN_RST = 0x06
+};
+int queueInstruction(unsigned char id, enum bob inst, unsigned int n_args, ...);
+
+
 ISR(USART3_UDRE_vect){
 	if (tx_buffer[tx_buffer_start].sent < tx_buffer[tx_buffer_start].len){
 		UDR3 = tx_buffer[tx_buffer_start].buff[tx_buffer[tx_buffer_start].sent];
@@ -36,7 +49,13 @@ ISR(USART3_UDRE_vect){
 		// turn off this interrupt:
 		UCSR3B &= ~(1 << 5);
 	}
-	/*Serial.println(tx_buffer_start);*/
+	/*Serial.print(tx_buffer_start);*/
+	/*Serial.print("-");*/
+	/*Serial.print(tx_buffer[tx_buffer_start].sent);*/
+	/*Serial.print("-");*/
+	/*Serial.print(tx_buffer[tx_buffer_start].len);*/
+	/*Serial.print("-");*/
+	/*Serial.println(tx_buffer_size);*/
 }
 
 ISR(USART3_RX_vect){
@@ -91,6 +110,56 @@ ISR(USART3_TX_vect){
 	UCSR3B |=  (1 << 4);
 }
 
+
+
+/*
+ * Function for adding an instruction to the buffer:
+ * Usage:
+ *   queueInstruction(id, inst, n_args, arg1, arg2, arg3 ..., argn, cb);
+ * Parameters:
+ *   id : id of dynamixel
+ *   int: type of instruction to send
+ *   n_args: the number of arguments for the instruction
+ *   argn : the n_args arguments to be sent
+ *   cb   : the callback function to be executed at the end
+ */
+int queueInstruction(unsigned char id, enum bob inst, unsigned int n_args, ...){
+	// If buffer is full, quit with error:	
+	if (tx_buffer_size >= MAX_TX_BUFFER_SIZE)
+		return -1;
+
+	// Find position to store next packet:
+	int next_pos = (tx_buffer_start + 1) % MAX_TX_BUFFER_SIZE;
+	if (tx_buffer_start == 8)
+		next_pos = 0;
+
+	va_list valist;
+	va_start(valist, n_args + 1);
+	
+	// Fill buffer entry:
+	tx_buffer[next_pos].buff[0] = 0xFF;
+	tx_buffer[next_pos].buff[1] = 0xFF;
+	tx_buffer[next_pos].buff[2] = id;
+	tx_buffer[next_pos].buff[3] = n_args + 2;
+	tx_buffer[next_pos].buff[4] = inst;
+	unsigned char sum = id + n_args + 2 + inst;
+	for (int i = 0; i < n_args; i++){
+		tx_buffer[next_pos].buff[i + 5] = va_arg(valist, int);
+		sum += tx_buffer[next_pos].buff[i + 5];
+	}
+	// calculate CRC:
+	tx_buffer[next_pos].buff[5 + n_args] = ~sum;
+
+	tx_buffer[next_pos].len = 6 + n_args;
+	tx_buffer[next_pos].sent = 0;
+	tx_buffer[next_pos].callback = va_arg(valist, void(*)(unsigned char *));
+	// signal that we have one more element waiting in the buffer:
+	tx_buffer_size++;
+	// free argument list:
+	va_end(valist);
+	
+}
+
 void buffer_step(){
 	/*Serial.print(tx_buffer_size);*/
 	/*Serial.print("buffer clear");*/
@@ -128,6 +197,7 @@ void status_callback(unsigned char *recv){
 	/*present_speed = *((uint16_t *)(recv + 7));*/
 	/*present_load = *((uint16_t *)(recv + 9));*/
 	/*Serial.println("ok");*/
+	/*Serial.println(recv[4]);*/
 
 
 
@@ -279,20 +349,7 @@ void loop() {
 
 	if (millis() > 2000 && !fez){
 		fez = 1;
-		Serial.println("vai fazer");
-		tx_buffer[0].buff[0] = 0xFF;
-		tx_buffer[0].buff[1] = 0xFF;
-		tx_buffer[0].buff[2] = 0x01;
-		tx_buffer[0].buff[3] = 5;
-		tx_buffer[0].buff[4] = 0x03;
-		tx_buffer[0].buff[5] = 32;
-		tx_buffer[0].buff[6] = 240;
-		tx_buffer[0].buff[7] = 0;
-		tx_buffer[0].buff[8] = ~(0x01 + 0x05 + 0x03 + 32 + 240 + 0);
-		tx_buffer[0].len = 9;
-		tx_buffer[0].sent = 0;
-		tx_buffer[0].callback = status_callback;
-		tx_buffer_size++;
+		queueInstruction(1, DYN_WR, 3, 32, 240, 4, status_callback);
 	}
 
 	/*delay(1700);*/

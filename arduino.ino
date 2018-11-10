@@ -1,13 +1,14 @@
 
 #define MAX_TX_BUFFER_SIZE 8
 
-uint16_t present_position;
-uint16_t present_speed;
-uint16_t present_load;
-uint8_t present_voltage;
-uint8_t present_temperature;
-uint16_t registered_instruction;
-uint8_t moving;
+volatile uint8_t dyn_error;
+volatile uint16_t present_position;
+volatile int16_t present_speed;
+volatile int16_t present_load;
+volatile uint8_t present_voltage;
+volatile uint8_t present_temperature;
+volatile uint16_t registered_instruction;
+volatile uint8_t moving;
 
 struct tx_msg{
 	unsigned char buff[16];
@@ -16,9 +17,9 @@ struct tx_msg{
 	void (*callback)(char *);
 };
 
-struct tx_msg tx_buffer[9];
-int tx_buffer_start = 0;
-int tx_buffer_size = 0;
+volatile struct tx_msg tx_buffer[9];
+volatile int tx_buffer_start = 0;
+volatile int tx_buffer_size = 0;
 
 unsigned long int last_received_byte = 0;
 
@@ -129,9 +130,14 @@ int queueInstruction(unsigned char id, enum bob inst, unsigned int n_args, ...){
 		return -1;
 
 	// Find position to store next packet:
-	int next_pos = (tx_buffer_start + 1) % MAX_TX_BUFFER_SIZE;
-	if (tx_buffer_start == 8)
+	int next_pos = (tx_buffer_start + tx_buffer_size) % MAX_TX_BUFFER_SIZE;
+	if (tx_buffer_size == 0)
 		next_pos = 0;
+	Serial.print("adding instruction: ");
+	Serial.print("pos: ");
+	Serial.print(next_pos);
+	Serial.print(" / size:");
+	Serial.println(tx_buffer_size);
 
 	va_list valist;
 	va_start(valist, n_args + 1);
@@ -186,7 +192,37 @@ void buffer_step(){
 
 }
 
+void telemetry_callback(unsigned char *recv){
+	dyn_error = recv[4];
 
+	*((uint8_t *)&present_position) = recv[5];
+	*(((uint8_t *)&present_position) + 1) = recv[6];
+
+	*((uint8_t *)&present_speed) = recv[7];
+	*(((uint8_t *)&present_speed) + 1) = recv[8];
+	if (present_speed & 0x400)
+		present_speed = -(present_speed & 0x3FF);
+
+	*((uint8_t *)&present_load) = recv[9];
+	*(((uint8_t *)&present_load) + 1) = recv[10];
+	if (present_load & 0x400)
+		present_load = -(present_load & 0x3FF);
+	/**((uint8_t *)&present_speed) = recv[7];*/
+	/**((uint8_t *)(&present_speed + 1)) = recv[8];*/
+	/**((uint8_t *)&present_load) = recv[9];*/
+	/**((uint8_t *)(&present_load + 1)) = recv[10];*/
+	/*Serial.println("pi");*/
+	/*Serial.println(recv[5]);*/
+	/*Serial.println(recv[6]);*/
+	/*Serial.println((unsigned long)*(((uint8_t *)&present_position) + 1));*/
+	/*Serial.println((unsigned long)*(((uint8_t *)&present_position)));*/
+	/*Serial.println(present_position);*/
+	/*Serial.println("###");*/
+	/*for (int i = 0; i < recv[3] + 4; i++){*/
+		/*Serial.println(recv[i]);*/
+	/*}*/
+	
+}
 
 void status_callback(unsigned char *recv){
 	/*for (int i = 0; i < recv[3] + 4; i++){*/
@@ -212,18 +248,6 @@ void status_callback(unsigned char *recv){
 
 void setup() {
 	Serial.begin(1000000);
-	pinMode(A0, INPUT);
-
-	/*Serial3.write(0xFF);*/
-	/*Serial3.write(0xFF);*/
-	/*Serial3.write(0x01);*/
-	/*Serial3.write(0x05);//len*/
-	/*Serial3.write(0x03);//inst*/
-	/*Serial3.write(30);//ende*/
-	/*Serial3.write(pos & 0xFF);//dat*/
-	/*Serial3.write(pos >> 8);//dat*/
-	/*Serial3.write((byte)((~(0x01 + 0x05 + 0x03 + 30 + (pos >> 8) + (pos & 0xFF))) & 0xFF));*/
-	
 	
 	tx_buffer[8].buff[0] = 0xFF;
 	tx_buffer[8].buff[1] = 0xFF;
@@ -235,36 +259,7 @@ void setup() {
 	tx_buffer[8].buff[7] = ~(0x01 + 0x04 + 0x02 + 36 + 11);
 	tx_buffer[8].len = 8;
 	tx_buffer[8].sent = 0;
-	tx_buffer[8].callback = &status_callback;
-
-	/*aSpeed=-aSpeed | 1024;*/
-
-
-	/*tx_buffer[8].buff[0] = 0xFF;*/
-	/*tx_buffer[8].buff[1] = 0xFF;*/
-	/*tx_buffer[8].buff[2] = 0x01;*/
-	/*tx_buffer[8].buff[3] = 5;*/
-	/*tx_buffer[8].buff[4] = 0x03;*/
-	/*tx_buffer[8].buff[5] = 32;*/
-	/*tx_buffer[8].buff[6] = 240;*/
-	/*tx_buffer[8].buff[7] = 0;*/
-	/*tx_buffer[8].buff[8] = ~(0x01 + 0x05 + 0x03 + 32 + 240 + 0);*/
-	/*tx_buffer[8].len = 9;*/
-	/*tx_buffer[8].sent = 0;*/
-	/*tx_buffer[8].callback = status_callback;*/
-
-
-	/*tx_buffer[8].buff[0] = 0xFF;*/
-	/*tx_buffer[8].buff[1] = 0xFF;*/
-	/*tx_buffer[8].buff[2] = 0x01;*/
-	/*tx_buffer[8].buff[3] = 4;*/
-	/*tx_buffer[8].buff[4] = 0x03;*/
-	/*tx_buffer[8].buff[5] = 24;*/
-	/*tx_buffer[8].buff[6] = 1;*/
-	/*tx_buffer[8].buff[8] = ~(0x01 + 0x04 + 0x03 + 24 + 1);*/
-	/*tx_buffer[8].len = 9;*/
-	/*tx_buffer[8].sent = 0;*/
-	/*tx_buffer[8].callback = status_callback;*/
+	tx_buffer[8].callback = &telemetry_callback;
 	tx_buffer_start = 8;
 	tx_buffer_size = 0;
 
@@ -288,9 +283,13 @@ void setup() {
 	UCSR3B |=  (1 << 5);
 
 
+	queueInstruction(1, DYN_WR, 3, 8, 255, 3, status_callback);
+	queueInstruction(1, DYN_WR, 3, 32, 0, 2, status_callback);
+	queueInstruction(1, DYN_WR, 3, 34, 240, 0, status_callback);
 }
 
-int fez = 0;
+unsigned long int last_action = millis();
+int fez = 1;
 void loop() {
 	if ( (UCSR3B & (1 << 4)) && (millis() - last_received_byte >= 10)){
 		last_received_byte = millis();
@@ -330,6 +329,8 @@ void loop() {
 		UCSR3B |=  (1 << 3);
 		UCSR3B |=  (1 << 5);
 	}
+	if (dyn_error)
+		Serial.println(dyn_error);
 
 	/*Serial.print("Present position: ");*/
 	/*Serial.println(present_position);*/
@@ -346,26 +347,23 @@ void loop() {
 	/*Serial.print("Moving: ");*/
 	/*Serial.println(moving);*/
 	/*Serial.println("*******************************");*/
+	/*delay(20);*/
 
-	if (millis() > 2000 && !fez){
-		fez = 1;
-		queueInstruction(1, DYN_WR, 3, 32, 240, 4, status_callback);
+
+	/*if (pose = NEUTRO)*/
+		/*manda comando e espera chegar no 0 de posicao*/
+	/*else if pose == esquerda vai pra la e fica verificando se chega no limite*/
+
+
+	if (millis() - last_action > 2000){
+		Serial.println("go");
+		if (fez)
+			fez = 0;
+		else
+			fez = 1;
+		/*queueInstruction(1, DYN_WR, 3, 32, 240, 4 * fez, status_callback);*/
+		queueInstruction(1, DYN_WR, 3, 30, 200, 2 * fez, status_callback);
+		last_action = millis();
 	}
 
-	/*delay(1700);*/
-	/*tx_buffer[8].buff[0] = 0xFF;*/
-	/*tx_buffer[8].buff[1] = 0xFF;*/
-	/*tx_buffer[8].buff[2] = 0x01;*/
-	/*tx_buffer[8].buff[3] = 0x05;*/
-	/*tx_buffer[8].buff[4] = 0x03;*/
-	/*tx_buffer[8].buff[5] = 32;*/
-	/*tx_buffer[8].buff[6] = 0xFF;*/
-	/*tx_buffer[8].buff[7] = 10;*/
-	/*tx_buffer[8].buff[8] = ~(0x01 + 0x05 + 0x03 + 32 + 0xFF + 10);*/
-	/*tx_buffer[8].len = 9;*/
-	/*tx_buffer[8].sent = 0;*/
-	/*tx_buffer[8].callback = NULL;*/
-	/*[>tx_buffer_size++;<]*/
-
-	/*delay(1700);*/
 }

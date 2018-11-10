@@ -2,6 +2,7 @@
 #define MAX_TX_BUFFER_SIZE 8
 
 volatile uint8_t dyn_error;
+volatile uint8_t dyn_error_sticky;
 volatile uint16_t present_position;
 volatile int16_t present_speed;
 volatile int16_t present_load;
@@ -23,7 +24,7 @@ volatile int tx_buffer_size = 0;
 
 unsigned long int last_received_byte = 0;
 
-int error = 0;
+int transmission_error = 0;
 
 unsigned char recv[32];
 int recv_count = 0;
@@ -41,30 +42,46 @@ enum bob{
 };
 int queueInstruction(unsigned char id, enum bob inst, unsigned int n_args, ...);
 
+volatile unsigned long int timeout_count;
+
+ISR(TIMER3_COMPA_vect){
+	if (recv_count != expected_recv){
+		/*Serial.println("t");*/
+		timeout_count++;
+		tx_buffer[tx_buffer_start].sent = 0;
+	}
+	transmission_error = 0;
+	recv_count = 0;
+	expected_recv = 255;
+	
+
+	// Turn off reception, turn on transmission and enable UDR clear interrupt:
+	UCSR3B &= ~(1 << 4);
+	UCSR3B |=  (1 << 3);
+	UCSR3B |=  (1 << 5);
+
+	// Disable these interrupts:
+	TIMSK3 &= ~0x02;
+	
+}
 
 ISR(USART3_UDRE_vect){
-	if (tx_buffer[tx_buffer_start].sent < tx_buffer[tx_buffer_start].len){
-		UDR3 = tx_buffer[tx_buffer_start].buff[tx_buffer[tx_buffer_start].sent];
-		tx_buffer[tx_buffer_start].sent++;
-	}else{
+	UDR3 = tx_buffer[tx_buffer_start].buff[tx_buffer[tx_buffer_start].sent];
+	tx_buffer[tx_buffer_start].sent++;
+	if (tx_buffer[tx_buffer_start].sent >= tx_buffer[tx_buffer_start].len){
 		// turn off this interrupt:
 		UCSR3B &= ~(1 << 5);
 	}
-	/*Serial.print(tx_buffer_start);*/
-	/*Serial.print("-");*/
-	/*Serial.print(tx_buffer[tx_buffer_start].sent);*/
-	/*Serial.print("-");*/
-	/*Serial.print(tx_buffer[tx_buffer_start].len);*/
-	/*Serial.print("-");*/
-	/*Serial.println(tx_buffer_size);*/
 }
 
 ISR(USART3_RX_vect){
 	recv[recv_count] = UDR3;
-	/*Serial.println((unsigned char)recv[recv_count]);*/
-	last_received_byte = millis();
+	// Set an interrupt to handle timeout if do not finish receiving all expected bytes to re-transmit the instruction:
+	OCR3A = TCNT3 + 3560;// 160 uS
+	TIMSK3 = TIMSK3 | 0x02;
+
 	// If in error state, we just read the register to clear the interrupt, and quit:
-	if (error){
+	if (transmission_error){
 		/*Serial.println("setou erro");*/
 		return;}
 
@@ -73,7 +90,9 @@ ISR(USART3_RX_vect){
 	// Check for errors and extract some info depending on position:
 	if (recv_count <= 2){
 		if (recv[recv_count - 1] != 0xFF){
-			error = 1;
+			transmission_error = 1;
+			// reset sent count, so we send this again:
+			tx_buffer[tx_buffer_start].sent = 0;
 		}
 	}else if(recv_count == 4){
 		expected_recv = recv[3] + 4;
@@ -94,21 +113,24 @@ ISR(USART3_RX_vect){
 
 		buffer_step();
 
-		// Turn off reception, turn on transmission and enable UDR clear interrupt:
-		UCSR3B &= ~(1 << 4);
-		UCSR3B |=  (1 << 3);
-		UCSR3B |=  (1 << 5);
-
+		// Set an interrupt to begin next transmission
+		OCR3A = TCNT3 + 1600;// about 100uS
+		TIMSK3 |= (1 << 1);
 	}
 
 }
 
 ISR(USART3_TX_vect){
-	/*Serial.println("g");*/
+	/*Serial.print("g");*/
 	last_received_byte = millis();
 	// turn off transmission, turn on reception:
 	UCSR3B &= ~(1 << 3);
 	UCSR3B |=  (1 << 4);
+
+	//Set an interrupt in case dynamixel fails to respond. The time until the interrupt is calculated to be bigger than
+	// the servo return delay time and some security margin:	
+	OCR3A = TCNT3 + 32000;// about 1ms
+	TIMSK3 |= 0x02;
 }
 
 
@@ -118,11 +140,11 @@ ISR(USART3_TX_vect){
  * Usage:
  *   queueInstruction(id, inst, n_args, arg1, arg2, arg3 ..., argn, cb);
  * Parameters:
- *   id : id of dynamixel
- *   int: type of instruction to send
- *   n_args: the number of arguments for the instruction
- *   argn : the n_args arguments to be sent
- *   cb   : the callback function to be executed at the end
+ *   id     : id of dynamixel
+ *   int    : type of instruction to send
+ *   n_args : the number of arguments for the instruction
+ *   argn   : the n_args arguments to be sent
+ *   cb     : the callback function to be executed at the end
  */
 int queueInstruction(unsigned char id, enum bob inst, unsigned int n_args, ...){
 	// If buffer is full, quit with error:	
@@ -133,11 +155,11 @@ int queueInstruction(unsigned char id, enum bob inst, unsigned int n_args, ...){
 	int next_pos = (tx_buffer_start + tx_buffer_size) % MAX_TX_BUFFER_SIZE;
 	if (tx_buffer_size == 0)
 		next_pos = 0;
-	Serial.print("adding instruction: ");
-	Serial.print("pos: ");
-	Serial.print(next_pos);
-	Serial.print(" / size:");
-	Serial.println(tx_buffer_size);
+	/*Serial.print("adding instruction: ");*/
+	/*Serial.print("pos: ");*/
+	/*Serial.print(next_pos);*/
+	/*Serial.print(" / size:");*/
+	/*Serial.println(tx_buffer_size);*/
 
 	va_list valist;
 	va_start(valist, n_args + 1);
@@ -187,13 +209,12 @@ void buffer_step(){
 			}
 		}
 	}
-	recv_count = 0;
-	expected_recv = 255;
-
 }
 
 void telemetry_callback(unsigned char *recv){
+	/*Serial.print("a");*/
 	dyn_error = recv[4];
+	dyn_error_sticky |= dyn_error;
 
 	*((uint8_t *)&present_position) = recv[5];
 	*(((uint8_t *)&present_position) + 1) = recv[6];
@@ -207,43 +228,12 @@ void telemetry_callback(unsigned char *recv){
 	*(((uint8_t *)&present_load) + 1) = recv[10];
 	if (present_load & 0x400)
 		present_load = -(present_load & 0x3FF);
-	/**((uint8_t *)&present_speed) = recv[7];*/
-	/**((uint8_t *)(&present_speed + 1)) = recv[8];*/
-	/**((uint8_t *)&present_load) = recv[9];*/
-	/**((uint8_t *)(&present_load + 1)) = recv[10];*/
-	/*Serial.println("pi");*/
-	/*Serial.println(recv[5]);*/
-	/*Serial.println(recv[6]);*/
-	/*Serial.println((unsigned long)*(((uint8_t *)&present_position) + 1));*/
-	/*Serial.println((unsigned long)*(((uint8_t *)&present_position)));*/
-	/*Serial.println(present_position);*/
-	/*Serial.println("###");*/
-	/*for (int i = 0; i < recv[3] + 4; i++){*/
-		/*Serial.println(recv[i]);*/
-	/*}*/
-	
 }
 
 void status_callback(unsigned char *recv){
-	/*for (int i = 0; i < recv[3] + 4; i++){*/
-		/*Serial.println(recv[i]);*/
-	/*}*/
-	/*Serial.println("#");*/
-	/*present_position = *((uint16_t *)(recv + 5));*/
-	/*present_speed = *((uint16_t *)(recv + 7));*/
-	/*present_load = *((uint16_t *)(recv + 9));*/
-	/*Serial.println("ok");*/
-	/*Serial.println(recv[4]);*/
-
-
-
-	/**((uint8_t *)present_position) = *((uint16_t *)recv + 1);*/
-	/**((uint8_t *)(present_position + 1)) = *((uint16_t *)recv);*/
-	/**((uint8_t *)present_speed) = *((uint16_t *)recv + 3);*/
-	/**((uint8_t *)(present_speed + 1)) = *((uint16_t *)recv + 2);*/
-	/**((uint8_t *)present_load) = *((uint16_t *)recv + 5);*/
-	/**((uint8_t *)(present_load + 1)) = *((uint16_t *)recv + 4);*/
-
+	/*Serial.println("b");*/
+	dyn_error = recv[4];
+	dyn_error_sticky |= dyn_error;
 }
 
 void setup() {
@@ -282,55 +272,28 @@ void setup() {
 	UCSR3B |=  (1 << 3);
 	UCSR3B |=  (1 << 5);
 
+	/*TCCR3A &= ~0xC0;*/
+	TCCR3A = 0;
+	TCCR3B = 1;
+	/*OCR3A = 600;*/
+	// Disable timer interrupts:
+	TIMSK3 &= ~0x02;
+
 
 	queueInstruction(1, DYN_WR, 3, 8, 255, 3, status_callback);
-	queueInstruction(1, DYN_WR, 3, 32, 0, 2, status_callback);
-	queueInstruction(1, DYN_WR, 3, 34, 240, 0, status_callback);
+	queueInstruction(1, DYN_WR, 3, 32, 0, 3, status_callback);
+	queueInstruction(1, DYN_WR, 3, 34, 240, 1, status_callback);
 }
 
 unsigned long int last_action = millis();
 int fez = 1;
+
+unsigned long int last_position = 0;
 void loop() {
-	if ( (UCSR3B & (1 << 4)) && (millis() - last_received_byte >= 10)){
-		last_received_byte = millis();
-		Serial.print(micros());
-		Serial.println("timeout");
-		if (tx_buffer_size == 0){
-			tx_buffer_start = 8;
-			tx_buffer[8].sent = 0;
-		}else{
-			if (tx_buffer_start == 8){
-				tx_buffer_start = 0;
-			}else{
-				tx_buffer_start = (tx_buffer_start + 1) % MAX_TX_BUFFER_SIZE;
-				tx_buffer_size--;
-			}
-		}
-		error = 0;
-		recv_count = 0;
-		expected_recv = 255;
-		
-
-		// Turn off reception, turn on transmission and enable UDR clear interrupt:
-		UCSR3B &= ~(1 << 4);
-		UCSR3B |=  (1 << 3);
-		UCSR3B |=  (1 << 5);
-	}
-	if (error){
-		Serial.print(micros());
-		Serial.println("error");
-		delay(50);
-		buffer_step();
-		error = 0;
-		
-
-		// Turn off reception, turn on transmission and enable UDR clear interrupt:
-		UCSR3B &= ~(1 << 4);
-		UCSR3B |=  (1 << 3);
-		UCSR3B |=  (1 << 5);
-	}
-	if (dyn_error)
+	if (dyn_error){
+		Serial.println("$$$$$$$$$");
 		Serial.println(dyn_error);
+	}
 
 	/*Serial.print("Present position: ");*/
 	/*Serial.println(present_position);*/
@@ -354,9 +317,11 @@ void loop() {
 		/*manda comando e espera chegar no 0 de posicao*/
 	/*else if pose == esquerda vai pra la e fica verificando se chega no limite*/
 
+	delay(500);
+	Serial.println(timeout_count);
 
-	if (millis() - last_action > 2000){
-		Serial.println("go");
+	if (millis() - last_action > 1000){
+		/*Serial.println("go");*/
 		if (fez)
 			fez = 0;
 		else

@@ -1,6 +1,14 @@
 
 #define MAX_TX_BUFFER_SIZE 8
 
+#define DEAD_ZONE_ESTIMATE 205
+
+
+uint16_t pos_log_buffer[2048];
+unsigned int buff_start = 0;
+unsigned int buff_end = 0;
+
+// Dynamixel State (irectly read from dynamixel):
 volatile uint8_t dyn_error;
 volatile uint8_t dyn_error_sticky;
 volatile uint16_t present_position;
@@ -11,6 +19,10 @@ volatile uint8_t present_temperature;
 volatile uint16_t registered_instruction;
 volatile uint8_t moving;
 
+// Global position estimative, tries to account for full rotations:
+volatile long int global_pos = 0;
+volatile uint16_t last_position = 0;
+
 struct tx_msg{
 	unsigned char buff[16];
 	int len;
@@ -18,21 +30,23 @@ struct tx_msg{
 	void (*callback)(char *);
 };
 
-volatile struct tx_msg tx_buffer[9];
+// We allocate the queue for outgoing messages with 1 extra position
+// This position will store th fallback command to send in case the queue is empty
+volatile struct tx_msg tx_buffer[MAX_TX_BUFFER_SIZE + 1];
 volatile int tx_buffer_start = 0;
 volatile int tx_buffer_size = 0;
 
-unsigned long int last_received_byte = 0;
-
+// Indicates there was a communication error, probably the first 2 read bytes were not 0xFF:
 int transmission_error = 0;
 
+// Buffer for received data:
 unsigned char recv[32];
 int recv_count = 0;
 int expected_recv = 255;
 
 
 
-enum bob{
+enum Dynamixel_Instruction{
 	DYN_RD = 0x02,
 	DYN_WR = 0x03,
 	DYN_RWR = 0x04,
@@ -40,7 +54,7 @@ enum bob{
 	DYN_PING = 0x01,
 	DYN_RST = 0x06
 };
-int queueInstruction(unsigned char id, enum bob inst, unsigned int n_args, ...);
+int queueInstruction(unsigned char id, enum Dynamixel_Instruction inst, unsigned int n_args, ...);
 
 volatile unsigned long int timeout_count;
 
@@ -121,8 +135,6 @@ ISR(USART3_RX_vect){
 }
 
 ISR(USART3_TX_vect){
-	/*Serial.print("g");*/
-	last_received_byte = millis();
 	// turn off transmission, turn on reception:
 	UCSR3B &= ~(1 << 3);
 	UCSR3B |=  (1 << 4);
@@ -146,7 +158,7 @@ ISR(USART3_TX_vect){
  *   argn   : the n_args arguments to be sent
  *   cb     : the callback function to be executed at the end
  */
-int queueInstruction(unsigned char id, enum bob inst, unsigned int n_args, ...){
+int queueInstruction(unsigned char id, enum Dynamixel_Instruction inst, unsigned int n_args, ...){
 	// If buffer is full, quit with error:	
 	if (tx_buffer_size >= MAX_TX_BUFFER_SIZE)
 		return -1;
@@ -218,6 +230,27 @@ void telemetry_callback(unsigned char *recv){
 
 	*((uint8_t *)&present_position) = recv[5];
 	*(((uint8_t *)&present_position) + 1) = recv[6];
+	if ((int)present_position - (int)last_position > 300){
+		global_pos -= DEAD_ZONE_ESTIMATE;
+		/*Serial.println("+");*/
+	}else if((int)present_position - (int)last_position < -300){
+		global_pos += DEAD_ZONE_ESTIMATE;
+		/*Serial.println("-");*/
+	}else{
+		global_pos += (int)present_position - (int)last_position;
+		/*Serial.print("-");*/
+		/*Serial.print(last_position);*/
+		/*Serial.print("=");*/
+		/*Serial.println((int)present_position - (int)last_position);*/
+	}
+	/*Serial.println(present_position);*/
+	last_position = present_position;
+	if ((buff_end + 1) % 2048 != buff_start){
+		pos_log_buffer[buff_end] = present_position;
+		buff_end = (buff_end + 1) % 2048;
+	}else{
+		pos_log_buffer[(buff_end + 2047) % 2048] = 0xFFFF;
+	}
 
 	*((uint8_t *)&present_speed) = recv[7];
 	*(((uint8_t *)&present_speed) + 1) = recv[8];
@@ -237,7 +270,7 @@ void status_callback(unsigned char *recv){
 }
 
 void setup() {
-	Serial.begin(1000000);
+	Serial.begin(2000000);
 	
 	tx_buffer[8].buff[0] = 0xFF;
 	tx_buffer[8].buff[1] = 0xFF;
@@ -280,15 +313,21 @@ void setup() {
 	TIMSK3 &= ~0x02;
 
 
-	queueInstruction(1, DYN_WR, 3, 8, 255, 3, status_callback);
-	queueInstruction(1, DYN_WR, 3, 32, 0, 3, status_callback);
+	queueInstruction(1, DYN_WR, 3, 8, 0, 0, status_callback);
+	queueInstruction(1, DYN_WR, 3, 32, 50, 1, status_callback);
 	queueInstruction(1, DYN_WR, 3, 34, 240, 1, status_callback);
+
+	// Wait until we get the current position:
+	delay(1000);
+	global_pos = present_position;
+	last_position = present_position;
+	// start moving:
+	/*queueInstruction(1, DYN_WR, 3, 30, 200, 0, status_callback);*/
 }
 
 unsigned long int last_action = millis();
 int fez = 1;
 
-unsigned long int last_position = 0;
 void loop() {
 	if (dyn_error){
 		Serial.println("$$$$$$$$$");
@@ -317,18 +356,46 @@ void loop() {
 		/*manda comando e espera chegar no 0 de posicao*/
 	/*else if pose == esquerda vai pra la e fica verificando se chega no limite*/
 
-	delay(500);
-	Serial.println(timeout_count);
-
-	if (millis() - last_action > 1000){
-		/*Serial.println("go");*/
-		if (fez)
-			fez = 0;
-		else
-			fez = 1;
-		/*queueInstruction(1, DYN_WR, 3, 32, 240, 4 * fez, status_callback);*/
-		queueInstruction(1, DYN_WR, 3, 30, 200, 2 * fez, status_callback);
-		last_action = millis();
+	/*delay(10);*/
+	while(buff_start != buff_end){
+		Serial.println(pos_log_buffer[buff_start]);
+		buff_start = (buff_start + 1) % 2048;
 	}
+	/*Serial.println("---");*/
+	/*Serial.print("error count:");*/
+	/*Serial.println(timeout_count);*/
+	/*Serial.print("present position(raw):");*/
+	/*Serial.println(present_position);*/
+	/*Serial.print("global estimate:");*/
+	/*Serial.println(global_pos);*/
+	/*Serial.print("present speed:");*/
+	/*Serial.println(present_speed);*/
+	/*Serial.print("present load:");*/
+	/*Serial.println(present_load);*/
+
+	if (millis() > 12000){
+		if (global_pos > 700){
+			queueInstruction(1, DYN_WR, 3, 32, 150, 5, status_callback);
+		}else if(global_pos > 30){
+			queueInstruction(1, DYN_WR, 3, 32, 150, 4, status_callback);
+		}else if(global_pos > -30){
+			queueInstruction(1, DYN_WR, 3, 32, 0, 0, status_callback);
+		}else if(global_pos > -700){
+			queueInstruction(1, DYN_WR, 3, 32, 150, 0, status_callback);
+		}else{
+			queueInstruction(1, DYN_WR, 3, 32, 150, 1, status_callback);
+		}
+		delay(10);
+	}
+
+
+	/*Serial.println("go");*/
+	/*if (fez)*/
+		/*fez = 0;*/
+	/*else*/
+		/*fez = 1;*/
+	/*[>queueInstruction(1, DYN_WR, 3, 32, 240, 4 * fez, status_callback);<]*/
+	/*queueInstruction(1, DYN_WR, 3, 30, 200, 2 * fez, status_callback);*/
+	/*last_action = millis();*/
 
 }

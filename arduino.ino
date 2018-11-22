@@ -1,12 +1,20 @@
 
+/*#define DEBUG_LOG_VALUES*/
+
 #define MAX_TX_BUFFER_SIZE 8
 
 #define DEAD_ZONE_ESTIMATE 205
 
 
-uint16_t pos_log_buffer[2048];
-unsigned int buff_start = 0;
-unsigned int buff_end = 0;
+
+#ifdef DEBUG_LOG_VALUES
+	#define LOG_BUFF_SIZE 512
+	uint16_t pos_log_buffer[LOG_BUFF_SIZE];
+	long int global_log_buffer[LOG_BUFF_SIZE];
+	uint16_t speed_log_buffer[LOG_BUFF_SIZE];
+	unsigned int buff_start = 0;
+	unsigned int buff_end = 0;
+#endif
 
 // Dynamixel State (irectly read from dynamixel):
 volatile uint8_t dyn_error;
@@ -230,27 +238,28 @@ void telemetry_callback(unsigned char *recv){
 
 	*((uint8_t *)&present_position) = recv[5];
 	*(((uint8_t *)&present_position) + 1) = recv[6];
-	if ((int)present_position - (int)last_position > 300){
-		global_pos -= DEAD_ZONE_ESTIMATE;
-		/*Serial.println("+");*/
-	}else if((int)present_position - (int)last_position < -300){
-		global_pos += DEAD_ZONE_ESTIMATE;
-		/*Serial.println("-");*/
+
+	if (last_position == 1023){
+		if (present_position < 128){
+			global_pos += DEAD_ZONE_ESTIMATE + (int)present_position;
+			last_position = present_position;
+		}else if(present_position > 900){
+			global_pos -= 1023 - (int)present_position;
+			last_position = present_position;
+		}
+	}else if(last_position == 0){
+		if (present_position < 128 && present_position > 0){
+			global_pos += (int)present_position;
+			last_position = present_position;
+		}else if(present_position > 900 && present_position < 1024){
+			global_pos -= DEAD_ZONE_ESTIMATE + 1023 - (int)present_position;
+			last_position = present_position;
+		}
 	}else{
 		global_pos += (int)present_position - (int)last_position;
-		/*Serial.print("-");*/
-		/*Serial.print(last_position);*/
-		/*Serial.print("=");*/
-		/*Serial.println((int)present_position - (int)last_position);*/
+		last_position = present_position;
 	}
-	/*Serial.println(present_position);*/
-	last_position = present_position;
-	if ((buff_end + 1) % 2048 != buff_start){
-		pos_log_buffer[buff_end] = present_position;
-		buff_end = (buff_end + 1) % 2048;
-	}else{
-		pos_log_buffer[(buff_end + 2047) % 2048] = 0xFFFF;
-	}
+
 
 	*((uint8_t *)&present_speed) = recv[7];
 	*(((uint8_t *)&present_speed) + 1) = recv[8];
@@ -261,6 +270,18 @@ void telemetry_callback(unsigned char *recv){
 	*(((uint8_t *)&present_load) + 1) = recv[10];
 	if (present_load & 0x400)
 		present_load = -(present_load & 0x3FF);
+
+	// Log position values if enabled:
+	#ifdef DEBUG_LOG_VALUES
+		if ((buff_end + 1) % LOG_BUFF_SIZE != buff_start){
+			pos_log_buffer[buff_end] = present_position;
+			global_log_buffer[buff_end] = global_pos;
+			speed_log_buffer[buff_end] = present_speed;
+			buff_end = (buff_end + 1) % LOG_BUFF_SIZE;
+		}else{
+			pos_log_buffer[(buff_end + LOG_BUFF_SIZE - 1) % LOG_BUFF_SIZE] = 0xFFFF;
+		}
+	#endif
 }
 
 void status_callback(unsigned char *recv){
@@ -312,15 +333,16 @@ void setup() {
 	// Disable timer interrupts:
 	TIMSK3 &= ~0x02;
 
-
-	queueInstruction(1, DYN_WR, 3, 8, 0, 0, status_callback);
-	queueInstruction(1, DYN_WR, 3, 32, 50, 1, status_callback);
-	queueInstruction(1, DYN_WR, 3, 34, 240, 1, status_callback);
-
 	// Wait until we get the current position:
-	delay(1000);
+	delay(500);
 	global_pos = present_position;
 	last_position = present_position;
+	delay(500);
+
+	queueInstruction(1, DYN_WR, 3, 8, 0, 0, status_callback);
+	queueInstruction(1, DYN_WR, 3, 32, 50, 5, status_callback);
+	queueInstruction(1, DYN_WR, 3, 34, 240, 1, status_callback);
+
 	// start moving:
 	/*queueInstruction(1, DYN_WR, 3, 30, 200, 0, status_callback);*/
 }
@@ -329,73 +351,49 @@ unsigned long int last_action = millis();
 int fez = 1;
 
 void loop() {
-	if (dyn_error){
-		Serial.println("$$$$$$$$$");
-		Serial.println(dyn_error);
-	}
-
-	/*Serial.print("Present position: ");*/
-	/*Serial.println(present_position);*/
-	/*Serial.print("Present speed: ");*/
-	/*Serial.println(present_speed);*/
-	/*Serial.print("Present load: ");*/
-	/*Serial.println(present_load);*/
-	/*Serial.print("Present voltage: ");*/
-	/*Serial.println(present_voltage);*/
-	/*Serial.print("Present temperature: ");*/
-	/*Serial.println(present_temperature);*/
-	/*Serial.print("Registered instruction: ");*/
-	/*Serial.println(registered_instruction);*/
-	/*Serial.print("Moving: ");*/
-	/*Serial.println(moving);*/
-	/*Serial.println("*******************************");*/
-	/*delay(20);*/
 
 
 	/*if (pose = NEUTRO)*/
 		/*manda comando e espera chegar no 0 de posicao*/
 	/*else if pose == esquerda vai pra la e fica verificando se chega no limite*/
 
-	/*delay(10);*/
-	while(buff_start != buff_end){
-		Serial.println(pos_log_buffer[buff_start]);
-		buff_start = (buff_start + 1) % 2048;
-	}
-	/*Serial.println("---");*/
-	/*Serial.print("error count:");*/
-	/*Serial.println(timeout_count);*/
-	/*Serial.print("present position(raw):");*/
-	/*Serial.println(present_position);*/
-	/*Serial.print("global estimate:");*/
-	/*Serial.println(global_pos);*/
-	/*Serial.print("present speed:");*/
-	/*Serial.println(present_speed);*/
-	/*Serial.print("present load:");*/
-	/*Serial.println(present_load);*/
+	/*delay(200);*/
 
-	if (millis() > 12000){
-		if (global_pos > 700){
-			queueInstruction(1, DYN_WR, 3, 32, 150, 5, status_callback);
-		}else if(global_pos > 30){
-			queueInstruction(1, DYN_WR, 3, 32, 150, 4, status_callback);
-		}else if(global_pos > -30){
-			queueInstruction(1, DYN_WR, 3, 32, 0, 0, status_callback);
-		}else if(global_pos > -700){
-			queueInstruction(1, DYN_WR, 3, 32, 150, 0, status_callback);
-		}else{
-			queueInstruction(1, DYN_WR, 3, 32, 150, 1, status_callback);
+	#ifdef DEBUG_LOG_VALUES
+		while(buff_start != buff_end){
+			Serial.print("a");
+			Serial.print(pos_log_buffer[buff_start]);
+			Serial.print("\nb");
+			Serial.print(global_log_buffer[buff_start]);
+			Serial.print("\nc");
+			Serial.print(speed_log_buffer[buff_start]);
+			Serial.print("\n");
+			buff_start = (buff_start + 1) % LOG_BUFF_SIZE;
 		}
-		delay(10);
+	#endif
+
+	if (dyn_error){
+		Serial.print("!!DYNAMIXEL ERROR!! :");
+		Serial.println(dyn_error);
 	}
+	Serial.println("---");
+	Serial.print("error count:");
+	Serial.println(timeout_count);
+	Serial.print("present position(raw):");
+	Serial.println(present_position);
+	Serial.print("global estimate:");
+	Serial.println(global_pos);
+	Serial.print("present speed:");
+	Serial.println(present_speed);
+	Serial.print("present load:");
+	Serial.println(present_load);
 
-
-	/*Serial.println("go");*/
-	/*if (fez)*/
-		/*fez = 0;*/
-	/*else*/
-		/*fez = 1;*/
-	/*[>queueInstruction(1, DYN_WR, 3, 32, 240, 4 * fez, status_callback);<]*/
-	/*queueInstruction(1, DYN_WR, 3, 30, 200, 2 * fez, status_callback);*/
-	/*last_action = millis();*/
-
+	int16_t val = analogRead(A0);
+	val -= 512;
+	if (val < 0)
+		val = -val | 0x400;
+	if (val < 100)
+		val = 0;
+	queueInstruction(1, DYN_WR, 3, 32, val & 0xFF, (val & 0x700) >> 8, status_callback);
+	delay(10);
 }

@@ -6,6 +6,7 @@
 #define DEAD_ZONE_ESTIMATE 205
 
 
+#include <MyoBridge.h>
 
 #ifdef DEBUG_LOG_VALUES
 	#define LOG_BUFF_SIZE 512
@@ -53,6 +54,9 @@ int recv_count = 0;
 int expected_recv = 255;
 
 
+//initialize MyoBridge object with hardware serial connection
+MyoBridge bridge(Serial2);
+MyoPose pose;
 
 enum Dynamixel_Instruction{
 	DYN_RD = 0x02,
@@ -307,6 +311,18 @@ void status_callback(unsigned char *recv){
 	dyn_error_sticky |= dyn_error;
 }
 
+
+/*
+ * Callback for myobridge pose data:
+ */
+void handlePoseData(MyoPoseData& data) {
+  
+  pose = (MyoPose)data.pose;
+
+  //print the pose
+  Serial.println(bridge.poseToString(pose));
+}
+
 void setup() {
 	// Start communication with computer for logging:
 	// The baud rate is the fastest possible to avoid
@@ -368,11 +384,28 @@ void setup() {
 
 	// start moving:
 	/*queueInstruction(1, DYN_WR, 3, 30, 200, 0, status_callback);*/
+
+
+	// Myo initialization:
+	Serial2.begin(115200);
+	//wait until MyoBridge has found Myo and is connected. Make sure Myo is not connected to anything else and not in standby!
+	Serial.println("Searching for Myo...");
+	bridge.begin();
+	Serial.println("connected!");
+
+	//set the function that handles pose events
+	bridge.setPoseEventCallBack(handlePoseData);
+	//tell the Myo we want Pose data
+	bridge.enablePoseData();
+	//make sure Myo is unlocked
+	bridge.unlockMyo();
 }
 
 
 void loop() {
 
+	Serial.println("update");
+  bridge.update();
 
 	/*if (pose = NEUTRO)*/
 		/*manda comando e espera chegar no 0 de posicao*/
@@ -397,24 +430,50 @@ void loop() {
 		Serial.print("!!DYNAMIXEL ERROR!! :");
 		Serial.println(dyn_error);
 	}
-	Serial.println("---");
-	Serial.print("error count:");
-	Serial.println(timeout_count);
-	Serial.print("present position(raw):");
-	Serial.println(present_position);
-	Serial.print("global estimate:");
-	Serial.println(global_pos);
-	Serial.print("present speed:");
-	Serial.println(present_speed);
-	Serial.print("present load:");
-	Serial.println(present_load);
+	/*Serial.println("---");*/
+	/*Serial.print("error count:");*/
+	/*Serial.println(timeout_count);*/
+	/*Serial.print("present position(raw):");*/
+	/*Serial.println(present_position);*/
+	/*Serial.print("global estimate:");*/
+	/*Serial.println(global_pos);*/
+	/*Serial.print("present speed:");*/
+	/*Serial.println(present_speed);*/
+	/*Serial.print("present load:");*/
+	/*Serial.println(present_load);*/
 
-	int16_t val = analogRead(A0);
-	val -= 512;
-	if (val < 0)
-		val = -val | 0x400;
-	if (val < 100)
-		val = 0;
-	queueInstruction(1, DYN_WR, 3, 32, val & 0xFF, (val & 0x700) >> 8, status_callback);
-	delay(10);
+	/*int16_t val = analogRead(A0);*/
+	/*val -= 512;*/
+	/*if (val < 0)*/
+		/*val = -val | 0x400;*/
+	/*if (val < 100)*/
+		/*val = 0;*/
+	/*queueInstruction(1, DYN_WR, 3, 32, val & 0xFF, (val & 0x700) >> 8, status_callback);*/
+	/*delay(10);*/
+	long int desired_position;
+	if (pose == MYO_POSE_WAVE_OUT){
+		desired_position = -2000;
+	}else if(pose == MYO_POSE_WAVE_IN){
+		desired_position = 2000;
+	}else if(pose == MYO_POSE_REST){
+		desired_position = 0;
+	}
+
+	if (global_pos - desired_position > 700){
+		// high negative speed:
+		queueInstruction(1, DYN_WR, 3, 32, 0, 7, status_callback);
+	}else if (global_pos - desired_position > 150){
+		// low negative speed:
+		queueInstruction(1, DYN_WR, 3, 32, 50, 5, status_callback);
+	}else if(global_pos - desired_position > -150){
+		//idle:
+		queueInstruction(1, DYN_WR, 3, 32, 0, 0, status_callback);
+	}else if(global_pos - desired_position > -700){
+		// slow positive speed:
+		queueInstruction(1, DYN_WR, 3, 32, 50, 1, status_callback);
+	}else{
+		// fast positive spee:
+		queueInstruction(1, DYN_WR, 3, 32, 0, 3, status_callback);
+	}
+	delay(100);
 }

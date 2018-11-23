@@ -452,11 +452,11 @@ void loop() {
 	/*delay(10);*/
 	long int desired_position;
 	if (pose == MYO_POSE_WAVE_OUT){
-		desired_position = -2000;
-	}else if(pose == MYO_POSE_WAVE_IN){
-		desired_position = 2000;
+		desired_position = 1300;
+	}else if(pose == MYO_POSE_WAVE_IN || pose == MYO_POSE_FIST){
+		desired_position = -1900;
 	}else if(pose == MYO_POSE_REST){
-		desired_position = 0;
+		desired_position = 250;
 	}
 
 	if (global_pos - desired_position > 700){

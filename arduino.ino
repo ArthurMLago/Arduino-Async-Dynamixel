@@ -1,5 +1,5 @@
 
-/*#define DEBUG_LOG_VALUES*/
+#define DEBUG_LOG_VALUES
 
 #define MAX_TX_BUFFER_SIZE 8
 
@@ -404,7 +404,7 @@ void setup() {
 
 void loop() {
 
-	Serial.println("update");
+	/*Serial.println("update");*/
   bridge.update();
 
 	/*if (pose = NEUTRO)*/

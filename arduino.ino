@@ -1,5 +1,5 @@
 
-/*#define DEBUG_LOG_VALUES*/
+#define DEBUG_LOG_VALUES 1
 
 #define MAX_TX_BUFFER_SIZE 8
 
@@ -243,6 +243,8 @@ void buffer_step(){
  * REMEMBER: this will be called from an interrupt so it must be brief!
  */
 void telemetry_callback(unsigned char *recv){
+	static long int last_millis;
+	unsigned long int millis_now;
 	// Update current error and sticky error:
 	dyn_error = recv[4];
 	dyn_error_sticky |= dyn_error;
@@ -270,9 +272,21 @@ void telemetry_callback(unsigned char *recv){
 			last_position = present_position;
 		}
 	}else{
-		global_pos += (int)present_position - (int)last_position;
-		last_position = present_position;
+		int delta = (int)present_position - (int)last_position/2;
+		millis_now = millis();
+		if (delta > (millis_now - last_millis)){
+			global_pos -= last_position;
+			last_position = 0;
+		}else if (-delta > (millis_now - last_millis)){
+			global_pos += last_position;
+			last_position = 1023;
+		}else{
+			global_pos += (int)present_position - (int)last_position;
+			last_position = present_position;
+
+		}
 	}
+	last_millis = millis_now;
 
 	// Upate present speed. This is also unreliable on encoder dead zone:
 	*((uint8_t *)&present_speed) = recv[7];
@@ -357,7 +371,7 @@ void setup() {
 	delay(500);
 	global_pos = present_position;
 	last_position = present_position;
-	delay(500);
+	delay(550);
 
 	// Enter wheel mode:
 	queueInstruction(1, DYN_WR, 3, 8, 0, 0, status_callback);
@@ -373,6 +387,7 @@ void setup() {
 
 void loop() {
 
+//pior caso da insterrupcao estimado: 21uS
 
 	/*if (pose = NEUTRO)*/
 		/*manda comando e espera chegar no 0 de posicao*/

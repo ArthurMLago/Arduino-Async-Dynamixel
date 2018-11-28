@@ -243,7 +243,7 @@ void buffer_step(){
  * REMEMBER: this will be called from an interrupt so it must be brief!
  */
 void telemetry_callback(unsigned char *recv){
-	static long int last_millis;
+	static unsigned long int last_millis;
 	unsigned long int millis_now;
 	// Update current error and sticky error:
 	dyn_error = recv[4];
@@ -272,12 +272,12 @@ void telemetry_callback(unsigned char *recv){
 			last_position = present_position;
 		}
 	}else{
-		int delta = (int)present_position - (int)last_position/2;
+		int delta = ((int)present_position - (int)last_position)/8;
 		millis_now = millis();
-		if (delta > (millis_now - last_millis)){
+		if (delta > (int)(millis_now - last_millis)){
 			global_pos -= last_position;
 			last_position = 0;
-		}else if (-delta > (millis_now - last_millis)){
+		}else if (-delta > (int)(millis_now - last_millis)){
 			global_pos += last_position;
 			last_position = 1023;
 		}else{

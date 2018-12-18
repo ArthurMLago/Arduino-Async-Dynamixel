@@ -1,5 +1,5 @@
 
-#define DEBUG_LOG_VALUES
+/*#define DEBUG_LOG_VALUES*/
 
 #define MAX_TX_BUFFER_SIZE 8
 
@@ -47,6 +47,8 @@ volatile int tx_buffer_size = 0;
 
 // Indicates there was a communication error, probably the first 2 read bytes were not 0xFF:
 int transmission_error = 0;
+// Variable for couting timeout transmission errors:
+volatile unsigned long int timeout_count;
 
 // Buffer for received data:
 unsigned char recv[32];
@@ -58,6 +60,7 @@ int expected_recv = 255;
 MyoBridge bridge(Serial2);
 MyoPose pose;
 
+// Possible instruction codes for the dynamixel:
 enum Dynamixel_Instruction{
 	DYN_RD = 0x02,
 	DYN_WR = 0x03,
@@ -66,10 +69,14 @@ enum Dynamixel_Instruction{
 	DYN_PING = 0x01,
 	DYN_RST = 0x06
 };
+
+// Prototype for main function for the library:
 int queueInstruction(unsigned char id, enum Dynamixel_Instruction inst, unsigned int n_args, ...);
 
-volatile unsigned long int timeout_count;
 
+// Interrupt for everytim there is a comparison match in the counter. Since we are always setting the
+// value for comparison a little ahead of the current value during communication, this interrupt
+// must mean there was a timeout error, or the wait time for sending the next command is over:
 ISR(TIMER3_COMPA_vect){
 	if (recv_count != expected_recv){
 		timeout_count++;

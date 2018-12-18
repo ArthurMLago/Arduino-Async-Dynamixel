@@ -6,6 +6,7 @@
 #define DEAD_ZONE_ESTIMATE 205
 
 
+#include <MyoBridge.h>
 
 #ifdef DEBUG_LOG_VALUES
 	#define LOG_BUFF_SIZE 512
@@ -31,6 +32,7 @@ volatile uint8_t moving;
 volatile long int global_pos = 0;
 volatile uint16_t last_position = 0;
 
+// Struct for every queued message to be sent to the dynamixel (maximum 16 bytes to be sent):
 struct tx_msg{
 	unsigned char buff[16];
 	int len;
@@ -46,6 +48,8 @@ volatile int tx_buffer_size = 0;
 
 // Indicates there was a communication error, probably the first 2 read bytes were not 0xFF:
 int transmission_error = 0;
+// Variable for couting timeout transmission errors:
+volatile unsigned long int timeout_count;
 
 // Buffer for received data:
 unsigned char recv[32];
@@ -53,7 +57,11 @@ int recv_count = 0;
 int expected_recv = 255;
 
 
+//initialize MyoBridge object with hardware serial connection
+MyoBridge bridge(Serial2);
+MyoPose pose;
 
+// Possible instruction codes for the dynamixel:
 enum Dynamixel_Instruction{
 	DYN_RD = 0x02,
 	DYN_WR = 0x03,
@@ -62,10 +70,14 @@ enum Dynamixel_Instruction{
 	DYN_PING = 0x01,
 	DYN_RST = 0x06
 };
+
+// Prototype for main function for the library:
 int queueInstruction(unsigned char id, enum Dynamixel_Instruction inst, unsigned int n_args, ...);
 
-volatile unsigned long int timeout_count;
 
+// Interrupt for everytim there is a comparison match in the counter. Since we are always setting the
+// value for comparison a little ahead of the current value during communication, this interrupt
+// must mean there was a timeout error, or the wait time for sending the next command is over:
 ISR(TIMER3_COMPA_vect){
 	if (recv_count != expected_recv){
 		timeout_count++;
@@ -381,20 +393,11 @@ void setup() {
 	queueInstruction(1, DYN_WR, 3, 34, 0xff, 3, status_callback);
 
 	// start moving:
-	/*queueInstruction(1, DYN_WR, 3, 30, 200, 0, status_callback);*/
+	queueInstruction(1, DYN_WR, 3, 30, 200, 0, status_callback);
 }
 
-
 void loop() {
-
-//pior caso da insterrupcao estimado: 21uS
-
-	/*if (pose = NEUTRO)*/
-		/*manda comando e espera chegar no 0 de posicao*/
-	/*else if pose == esquerda vai pra la e fica verificando se chega no limite*/
-
-	/*delay(200);*/
-
+	// Send log values through serial if logs are enabled:
 	#ifdef DEBUG_LOG_VALUES
 		while(buff_start != buff_end){
 			Serial.print("a");
@@ -412,24 +415,45 @@ void loop() {
 		Serial.print("!!DYNAMIXEL ERROR!! :");
 		Serial.println(dyn_error);
 	}
-	Serial.println("---");
-	Serial.print("error count:");
-	Serial.println(timeout_count);
-	Serial.print("present position(raw):");
-	Serial.println(present_position);
-	Serial.print("global estimate:");
-	Serial.println(global_pos);
-	Serial.print("present speed:");
-	Serial.println(present_speed);
-	Serial.print("present load:");
-	Serial.println(present_load);
+	// Log values:
+	/*Serial.println("---");*/
+	/*Serial.print("error count:");*/
+	/*Serial.println(timeout_count);*/
+	/*Serial.print("present position(raw):");*/
+	/*Serial.println(present_position);*/
+	/*Serial.print("global estimate:");*/
+	/*Serial.println(global_pos);*/
+	/*Serial.print("present speed:");*/
+	/*Serial.println(present_speed);*/
+	/*Serial.print("present load:");*/
+	/*Serial.println(present_load);*/
 
-	int16_t val = analogRead(A0);
-	val -= 512;
-	if (val < 0)
-		val = -val | 0x400;
-	if (val < 100)
-		val = 0;
-	queueInstruction(1, DYN_WR, 3, 32, val & 0xFF, (val & 0x700) >> 8, status_callback);
-	delay(10);
+	// Reading speed from potentiometer:
+	/*int16_t val = analogRead(A0);*/
+	/*val -= 512;*/
+	/*if (val < 0)*/
+		/*val = -val | 0x400;*/
+	/*if (val < 100)*/
+		/*val = 0;*/
+	/*queueInstruction(1, DYN_WR, 3, 32, val & 0xFF, (val & 0x700) >> 8, status_callback);*/
+	/*delay(10);*/
+
+	// Follow a desired position:
+	/*if (global_pos - desired_position > 700){*/
+		/*// high negative speed:*/
+		/*queueInstruction(1, DYN_WR, 3, 32, 0, 7, status_callback);*/
+	/*}else if (global_pos - desired_position > 150){*/
+		/*// low negative speed:*/
+		/*queueInstruction(1, DYN_WR, 3, 32, 50, 5, status_callback);*/
+	/*}else if(global_pos - desired_position > -150){*/
+		/*//idle:*/
+		/*queueInstruction(1, DYN_WR, 3, 32, 0, 0, status_callback);*/
+	/*}else if(global_pos - desired_position > -700){*/
+		/*// slow positive speed:*/
+		/*queueInstruction(1, DYN_WR, 3, 32, 50, 1, status_callback);*/
+	/*}else{*/
+		/*// fast positive spee:*/
+		/*queueInstruction(1, DYN_WR, 3, 32, 0, 3, status_callback);*/
+	/*}*/
+	delay(100);
 }
